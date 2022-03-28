@@ -320,7 +320,7 @@ def scint_bw(burstid,ds,tcent,t_width,fres,maskfile=None,start_time=0,outdir='./
 
 
     """
-    tburst = tcent - start_time #time in milliseconds into the ds where the burst TOA is
+    tburst = tcent - start_time #time in milliseconds into the ds where the burst is
     tburst /= (tres*1000) # in bins
     tburst = int(tburst)
     #compute the 2sigma region
@@ -643,7 +643,7 @@ if __name__ == "__main__":
         #just going to find the mid point between the two extreme (like 1st and last components)
         # otherwise use the tcent and fcent from the 2d fits
         if gausfit.shape[0] >1:
-            TOA = gausfit[gausfit.shape[0]-1][1]+(beg_window*1000) - (gausfit[0][1]+(beg_window*1000))/2. + gausfit[0][1]+(beg_window*1000)
+            TOA = ((gausfit[gausfit.shape[0]-1][1]-gausfit[0][1])/2.) +	(gausfit[0][1]+(beg_window*1000))
             FOA = (gausfit[gausfit.shape[0]-1][2]-gausfit[0][2])/2. + min(gausfit[gausfit.shape[0]-1][2],gausfit[0][2])
         else:
             TOA = gausfit[0][1]+(beg_window*1000)
