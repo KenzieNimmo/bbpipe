@@ -105,7 +105,7 @@ def load_filterbank(filterbank_name,dm=None,fullpol=False,burst_time=None):
             spec = fil.get_spectra(burst_bin-int(50e-3/tsamp),int(2*tdel/tsamp))
             begbin=burst_bin-int(50e-3/tsamp)
         elif burst_bin-int(50e-3/tsamp) < 0:
-            spec = fil.get_spectra(0,int(200e-3/tsamp)+(burst_bin-int(2*tdel/tsamp)))
+            spec = fil.get_spectra(0,int(2*tdel/tsamp))
             bt = burst_bin*tsamp
             begbin=0
         else:
