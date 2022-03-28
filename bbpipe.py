@@ -281,8 +281,8 @@ def fit_gaus(burstid,ds,frequencies,tsamp,twidth_guess,fwidth_guess, plot=False,
         amp_guesses = np.array(subbursts.peak_amps)
     else:
         print("We are assuming there is only one burst component to fit a Gaussian for burst B%s"%burstid)
-        time_guesses = np.array([np.argmax(ds)[1]])
-        freq_guesses = np.array([np.argmax(ds)[0]])
+        time_guesses = np.array([np.where(ds==np.max(ds))[1][0]])
+        freq_guesses = np.array([np.where(ds==np.max(ds))[0][0]])
         amp_guesses = np.array([np.max(ds)])
 
     # Get the times at the pixel centers in ms.
