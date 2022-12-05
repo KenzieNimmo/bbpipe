@@ -6,7 +6,7 @@ Kenzie Nimmo 2022
 Given burst filterbanks, masks and time (in seconds) into the filterbanks where the burst occurs, this will calculate:
 - the burst extent in time and frequency using an ACF analysis
 - the burst TOA using the centroid of a 2D Gaussian fit and barycentring using the DM, telescope position and source position
-- the burst fluence, peak flux density, S/N, and energy using the known distance to the source
+ the burst fluence, peak flux density, S/N, and energy using the known distance to the source
 
 Output the burst properties in a pandas dataframe, which can be used to plot the family plot of bursts or create LaTeX tables of burst properties for publication.
 
@@ -43,6 +43,7 @@ def loaddata(filename, t_burst, DM=0, maskfile=None, fullpol=False, window=10):
     """
     if fullpol==False:
         ds,dsoff,extent,tsamp,begbin=load_filterbank(filename,dm=DM,fullpol=False,burst_time=t_burst)
+
         StokesI_ds = np.zeros_like(ds)
         StokesI_off = np.zeros_like(dsoff)
         #removing bandpass
@@ -61,25 +62,52 @@ def loaddata(filename, t_burst, DM=0, maskfile=None, fullpol=False, window=10):
             StokesI_ds[maskchans,:]=0
             StokesI_off[maskchans,:]=0
 
+    #chop out window
+    binwind=int(window/(tsamp*1000.))
+    begin_t=int(t_burst/tsamp)-begbin - binwind
+    end_t=int(t_burst/tsamp)-begbin +binwind
+    if begin_t < 0:
+        begin_t = 0
+    if end_t > StokesI_ds.shape[1]:
+        end_t = StokesI_ds.shape[1]-1
+
+    StokesI_ds=StokesI_ds[:,begin_t:end_t]
+    begbin=begbin+begin_t
+    
     if fullpol==True:
         raise ValueError('Full pol filterbank data is not currently supported.')
 
     return StokesI_ds, StokesI_off, tsamp, freqres, begbin, frequencies
 
-def window(ds,window,tsamp):
+def window(ds,window,tsamp,begintime):
     """
     chop out a window around the burst (peak of the profile)
     """
     profile = np.mean(ds,axis=0)
-    begin=np.argmax(profile)-int(window/(1000*tsamp))
-    end=np.argmax(profile)+int(window/(1000*tsamp))
+    
+    if begintime!=0:
+        begin_b=int(10e-3/tsamp)-int(window*2/(1000*tsamp))
+        end_b=int(10e-3/tsamp)+int(window*2/(1000*tsamp))
+        profchop=profile[begin_b:end_b]
+        begin=np.argmax(profchop)+begin_b - int(window/(1000*tsamp))
+        end=begin + 2*int(window/(1000*tsamp))
+        if np.max(profile)!=np.max(np.mean(ds[:,begin:end],axis=0)):
+            begin=np.argmax(profile)-int(window/(1000*tsamp))
+            end=np.argmax(profile)+int(window/(1000*tsamp))
+    else:
+        begin=np.argmax(profile)-int(window/(1000*tsamp))
+        end=np.argmax(profile)+int(window/(1000*tsamp))
     burstds=ds[:,begin:end]
     return burstds,begin
+
 def downsamp(ds,tdown=1,fdown=1):
+    tdown=int(tdown)
+    fdown=int(fdown)
+
     if fdown!=1:
         ds=ds.reshape(ds.shape[0]//fdown, fdown,ds.shape[-1]).sum(axis=1)
     if tdown!=1:
-        ds=ds.reshape(ds.shape[0], ds.shape[-1]/tdown, tdown).sum(axis=2)
+        ds=ds.reshape(ds.shape[0], ds.shape[-1]//tdown, tdown).sum(axis=2)
     return ds
 
 def convert_SN(burst_prof, off_prof):
@@ -105,7 +133,7 @@ def twodacf(burstid, ds, timeres, freqres, acf_load=None, save=False, plot=False
         ACF=autocorr_2D(ds)
     else:
         ACF=np.load(acf_load)
-
+        
     if save==True:
         np.save(str(outdir)+'/B'+str(burstid)+'_2D_ACF.npy', ACF)
 
@@ -167,8 +195,8 @@ def twodacf(burstid, ds, timeres, freqres, acf_load=None, save=False, plot=False
     params.add('amplitude', value=1)
     params.add('xo',value=0,vary=False)
     params.add('yo',value=0,vary=False)
-    params.add('sigma_x',value=poptt[2],min=poptt[2]-0.2*poptt[2], max=poptt[2]+0.2*poptt[2])
-    params.add('sigma_y',value=poptf[2],min=poptf[2]-0.2*poptf[2], max=poptf[2]+0.2*poptf[2])
+    params.add('sigma_x',value=int(poptt[2]),min=poptt[2]-0.5*poptt[2], max=poptt[2]+0.5*poptt[2])
+    params.add('sigma_y',value=int(poptf[2]),min=poptf[2]-0.5*poptf[2], max=poptf[2]+0.5*poptf[2])
     params.add('theta',value=0)
 
     out = minimize(twoD_Gaussian_fit, params, kws={"x_data_tuple": (timesh,freqs_m), "data": ACFmasked})
@@ -182,7 +210,7 @@ def twodacf(burstid, ds, timeres, freqres, acf_load=None, save=False, plot=False
     #residuals
     ACFtimeresid = ACFtime-np.sum(data_fitted,axis=0)
     ACFfreqresid = ACFfreq-np.sum(data_fitted,axis=1)
-
+    
     #plot
     fig = plt.figure(figsize=(8, 8))
     rows=3
@@ -294,7 +322,7 @@ def fit_gaus(burstid,ds,frequencies,tsamp,twidth_guess,fwidth_guess, plot=False,
 
     n_sbs = len(time_guesses)
     freq_std_guess = [fwidth_guess] * n_sbs
-    t_std_guess = [twidth_guess] * n_sbs
+    t_std_guess = [twidth_guess/n_sbs] * n_sbs
 
     model = fitter.gen_Gauss2D_model(time_guesses, amp_guesses, f0=freq_guesses,bw=freq_std_guess, dt=t_std_guess, verbose=True)
 
@@ -320,7 +348,7 @@ def scint_bw(burstid,ds,tcent,t_width,fres,maskfile=None,start_time=0,outdir='./
 
 
     """
-    tburst = tcent - start_time #time in milliseconds into the ds where the burst is
+    tburst = tcent - start_time #time in milliseconds into the ds where the burst TOA is
     tburst /= (tres*1000) # in bins
     tburst = int(tburst)
     #compute the 2sigma region
@@ -342,7 +370,7 @@ def scint_bw(burstid,ds,tcent,t_width,fres,maskfile=None,start_time=0,outdir='./
     #prep for scint bw fit
     ACFf_for_fit = ACF[int(len(ACF)/2.-(30/fres)):int(len(ACF)/2.+(30/fres))]
     freq_for_fit = freqs[int(len(ACF)/2.-(30/fres)):int(len(ACF)/2.+(30/fres))]
-
+    
     #do scint bw fit
     gmodel = Model(lorentz)
     try:
@@ -352,7 +380,7 @@ def scint_bw(burstid,ds,tcent,t_width,fres,maskfile=None,start_time=0,outdir='./
     except:
         print("Could not do scintillation bandwidth fitting")
         return 0,0
-
+    
     fig,ax=plt.subplots(2)
     ax[0].plot(freqs,ACF,color='orange')
     ax[0].plot(freqs,lorentz(freqs,result_freq.params['gamma'],result_freq.params['y0'],result_freq.params['c']),color='green',label='Scint bw: %.2f MHz'%result_freq.params['gamma'])
@@ -397,9 +425,9 @@ def compute_fluence(burstid,ds,dsoff,tcent,fcent,t_width,f_width,tres,fres,freqs
 
     if begin_f < 0:
         begin_f=0
-    if end_f >= ds.shape[0]:
+    if end_f >= ds.shape[0] or end_f < 0:
         end_f=ds.shape[0]-1
-
+        
     burst_ds = ds[begin_f:end_f, begin_t:end_t]
     off = dsoff[begin_f:end_f,100:100+(end_t-begin_t)]
 
@@ -502,29 +530,28 @@ if __name__ == "__main__":
     # first we have the inputs needed
 
     #****bursts*****#
-    burstids=np.arange(52)+1 #B1--> B52
-    #we don't have data for B2 so remove this one
-    burstids=np.delete(burstids,1)
+    burstids=np.array([4,7])#np.arange(3)+8 #B1--> B52
+    
 
     #where are the filterbank files stored
-    indir_fil='/data1/kenzie/M81_monitoring/bursts/Jan142022/filterbank/5.12us/'
+    indir_fil='/data1/kenzie/M81_monitoring/bursts/Jun232022/filterbanks/'
     #where are the mask files stored?
-    indir_masks='/data1/kenzie/M81_monitoring/bursts/Jan142022/filterbank/flags/2048chan/'
+    indir_masks='/data1/kenzie/M81_monitoring/bursts/Jun232022/filterbanks/flags/2048chan/'
     #import text file of burst times (or alternatively create your array of burst times, matching order of burstids)
-    burst_times=np.loadtxt('/data1/kenzie/M81_monitoring/bursts/Jan142022/Jan14_burst_times.txt')
+    burst_times=[0.547385006211698,0.9163850918412209]#np.loadtxt('/data1/kenzie/M81_monitoring/bursts/Jan142022/Jan14_burst_times.txt')
     #what DM?
     DM=87.7527
     #downsample?
     tdown=np.ones_like(burstids)
-    fdown=32
-
+    fdown=np.zeros_like(burstids)+8
+    
     #SEFD of your observations
-    SEFD = 20/1.54
+    SEFD = (20+3+0.8)/1.54
     #distance to your source
     distance=3.63 #Mpc
 
     #if we want to amend an already existing dataframe, load it in here:
-    existing_df = None #name (with full path) of the csv file containing an existing df
+    existing_df = '/data1/kenzie/M81_monitoring/bursts/Jun232022/Jun23_StokesI.csv'#'/data1/kenzie/M81_monitoring/bursts/Jan142022/basic_properties/Jan14_burst_properties.final.csv' #name (with full path) of the csv file containing an existing df
     if existing_df!=None:
         df = pd.read_csv(existing_df, index_col=0)
     #otherwise start a new one
@@ -544,20 +571,20 @@ if __name__ == "__main__":
         # Eiso is the isotropic energy (erg)
         # Espec is the spectral energy (erg Hz^-1)
         # Lspec is the spectral luminosity (erg Hz^-1 s^-1)
-        df = pd.DataFrame(index=burstids, columns=['Fil_file', 'Mask_file', 'Burst_time', 'Time_downsample', 'Time_width', 'Time_width_error','Freq_width', 'Freq_width_error', 'Theta','Theta_err','Scint_bw','Scint_bw_error','ncomp','TOA','FOA', 'S/N', 'Peak_S/N', 'Peak_flux', 'Fluence', 'Eiso', 'Espec', 'Lspec'])
+        df = pd.DataFrame(index=burstids, columns=['Fil_file', 'Mask_file', 'Burst_time', 'Time_downsample', 'Time_width', 'Time_width_error','Freq_width', 'Freq_width_error', 'Theta','Theta_err','Scint_bw','Scint_bw_error','ncomp','TOA','FOA', 'S/N', 'Peak_S/N', 'Peak_flux', 'Fluence', 'Eiso', 'Espec', 'Lspec','ACF/gaus'])
 
         #let's fill in what we need to start the analysis -- fil_file, mask_file and burst_time
         for i,burst in enumerate(burstids):
-            df.loc[burst,'Fil_file']=indir_fil+'B'+str(burst)+'_cDD_DM87.7527_F2048_b32_d1.fil'
+            df.loc[burst,'Fil_file']=indir_fil+'B'+str(burst)+'_2048ch_DM87.7527_coherentDD_32bit_StokesI.fil'
             df.loc[burst,'Mask_file']=indir_masks+'B'+str(burst)+'_2048ch.flag'
             df.loc[burst,'Burst_time']=burst_times[i]
 
     #do you want to plot things on screen as you go through -- diagnostic plots and plots to check it's going smoothly?
     plot = True
     #for plots saved to disk, and numpy files, give an output directory
-    outdir='/data1/kenzie/M81_monitoring/bursts/Jan142022/basic_properties/'
+    outdir='/data1/kenzie/M81_monitoring/bursts/Jun232022/'
     #name for final csv file containing all results
-    out_filename='Jan14_burst_properties.csv'
+    out_filename='Jun23_StokesI.csv'
 
 
     #you may not want to analyse all the bursts so give here a list of the bursts you want to analyse from your burstids
@@ -566,6 +593,7 @@ if __name__ == "__main__":
         #load in the filterbank data
         print("*** Loading in data for burst B%s ***"%burst)
         dynspec,dynspec_off,tres,fres,begin_bin,freqs=loaddata(df.loc[burst]['Fil_file'], df.loc[burst]['Burst_time'], DM=DM, maskfile=df.loc[burst]['Mask_file'], fullpol=False)
+        
         begintime=begin_bin*tres #seconds
         twidth=0
         fwidth=0
@@ -576,14 +604,15 @@ if __name__ == "__main__":
         fres_orig=fres
         tres_orig=tres
         while twidth==0 and fwidth==0:
-            if tdown[bn]!=1 or fdown!=1:
+            if tdown[bn]!=1 or fdown[bn]!=1:
                 while dynspec_orig.shape[1]%tdown[bn] !=0:
                     dynspec_orig=dynspec_orig[:,:-1]
                 while dynspec_off_orig.shape[1]%tdown[bn] !=0:
                     dynspec_off_orig=dynspec_off_orig[:,:-1]
 
-                dynspec=downsamp(dynspec_orig,tdown=tdown[bn],fdown=fdown)
-                dynspec_off=downsamp(dynspec_off_orig,tdown=tdown[bn],fdown=fdown)
+                dynspec=downsamp(dynspec_orig,tdown=tdown[bn],fdown=fdown[bn])
+                dynspec_off=downsamp(dynspec_off_orig,tdown=tdown[bn],fdown=fdown[bn])
+                
                 #correct the frequency array for the downsampling
                 min_f=freqs_orig.min() - fres/2
                 max_f = freqs_orig.max() + fres/2
@@ -592,10 +621,12 @@ if __name__ == "__main__":
                 freqs=np.linspace((min_f+fres/2),(max_f-fres/2),dynspec.shape[0])
                 #new sampling time
                 tres=tres_orig*tdown[bn]
-
+        
             #perform the ACF analysis
             print("*** Performing ACF analysis for burst B%s ***"%burst)
-            burstds,beg_sm=window(dynspec,0.5,tres) #chop out the burst
+            print(tres)
+            burstds,beg_sm=window(dynspec,0.25,tres,begin_bin) #chop out the burst, 0.5
+           
             twidth,twidtherr,fwidth,fwidtherr,theta,thetaerr = twodacf(burst, burstds, tres, fres, acf_load=None, save=True, plot=plot, outdir=outdir)
             if twidth==0 and fwidth==0:
                 print("Downsampling burst B%s by a factor of 2 in time"%burst)
@@ -604,6 +635,7 @@ if __name__ == "__main__":
 
 
         df.loc[burst,'Time_downsample']=tdown[bn]
+        df.loc[burst,'Freq_downsample']=fdown[bn]
         df.loc[burst,'Time_width']=twidth
         df.loc[burst,'Time_width_error']=twidtherr
         df.loc[burst,'Freq_width']=fwidth
@@ -613,7 +645,7 @@ if __name__ == "__main__":
 
         #perform the 2D gaussian fit to the dynamic spectrum
         print("*** Performing 2D Gaussian fit analysis for burst B%s ***"%burst)
-        burstds,beg_sm=window(dynspec,5,tres)
+        burstds,beg_sm=window(dynspec,5,tres,begin_bin)
         #output for fit is in ms and MHz
         gausfit,gausfit_errors=fit_gaus(burst,burstds,freqs,tres,twidth,fwidth,plot=plot,outdir=outdir)
         #peak time in overall filterbank is begin_bin + beg_sm + peak bin in burstds
@@ -643,7 +675,7 @@ if __name__ == "__main__":
         #just going to find the mid point between the two extreme (like 1st and last components)
         # otherwise use the tcent and fcent from the 2d fits
         if gausfit.shape[0] >1:
-            TOA = ((gausfit[gausfit.shape[0]-1][1]-gausfit[0][1])/2.) +	(gausfit[0][1]+(beg_window*1000))
+            TOA = ((gausfit[gausfit.shape[0]-1][1]-gausfit[0][1])/2.) + (gausfit[0][1]+(beg_window*1000))
             FOA = (gausfit[gausfit.shape[0]-1][2]-gausfit[0][2])/2. + min(gausfit[gausfit.shape[0]-1][2],gausfit[0][2])
         else:
             TOA = gausfit[0][1]+(beg_window*1000)
@@ -651,14 +683,59 @@ if __name__ == "__main__":
         df.loc[burst,'TOA']=TOA
         df.loc[burst,'FOA']=FOA
 
+        fitans=None
+        if plot == True:
+            fitans=str(raw_input('Do you want to use the ACF (a) or gaussian fits (g) as the reported burst width in time and frequency?'))
+            if fitans == 'g':
+                print('Using the Gaussian fits as the reported widths in time and frequency.')
+                df.loc[burst,'ACF/gaus']='g'
+                twidth = gausfit[0][3]
+                fwidth = gausfit[0][4]
+            else:
+                print('Using the ACF fits as the reported widths in time and frequency.')
+                df.loc[burst,'ACF/gaus']='a'
+        else:
+            print("Using the ACF fits as the reported widths in time and frequency.")
+            df.loc[burst,'ACF/gaus']='a'
+            
+        if gausfit.shape[0] == 2:
+            print("Per component ACF")
+            TOA_sub = TOA-(beg_window*1000) #ms
+            print(TOA_sub)
+            TOA_bin=int(TOA_sub/(tres*1000.)) #bins
+            print(TOA_bin)
+            print((burstds.shape))
+            plt.plot(np.mean(burstds[:,TOA_bin-int(0.5/(tres*1000)):TOA_bin+int(0.5/(tres*1000))],axis=0))
+            plt.axvline(int(0.5/(tres*1000)))
+            plt.show()
+            
+            twidth_c1,twidtherr_c1,fwidth_c1,fwidtherr_c1,theta_c1,thetaerr_c1 = twodacf(str(burst)+"_1", burstds[:,TOA_bin-int(0.5/(tres*1000)):TOA_bin+1], tres, fres, acf_load=None, save=True, plot=plot, outdir=outdir)
+            twidth_c2,twidtherr_c2,fwidth_c2,fwidtherr_c2,theta_c2,thetaerr_c2 = twodacf(str(burst)+"_2", burstds[:,TOA_bin:TOA_bin+int(0.5/(tres*1000))], tres, fres, acf_load=None, save=True, plot=plot, outdir=outdir)
+            df.loc[burst,'Time_width_c1']=twidth_c1
+            df.loc[burst,'Time_width_error_c1']=twidtherr_c1
+            df.loc[burst,'Freq_width_c1']=fwidth_c1
+            df.loc[burst,'Freq_width_error_c1']=fwidtherr_c1
+            df.loc[burst,'Theta_c1']=theta_c1
+            df.loc[burst,'Theta_err_c1']=thetaerr_c1
+            df.loc[burst,'Time_width_c2']=twidth_c2
+            df.loc[burst,'Time_width_error_c2']=twidtherr_c2
+            df.loc[burst,'Freq_width_c2']=fwidth_c2
+            df.loc[burst,'Freq_width_error_c2']=fwidtherr_c2
+            df.loc[burst,'Theta_c2']=theta_c2
+            df.loc[burst,'Theta_err_c2']=thetaerr_c2
+            
+        if gausfit.shape[0] > 2:
+            print("Individual components not supported for > 2 comps")
+            
+
         print("*** Performing scintillation bandwidth analysis for burst B%s ***"%burst)
         print("Note we use the original frequency resolution for this (i.e. ignoring downsampling factor given above).")
 
-        burstds_origfreq,beg_sm_origfreq=window(dynspec_orig,5,tres)
+        burstds_origfreq,beg_sm_origfreq=window(dynspec_orig,5,tres,begin_bin)
         scintbw,scintbwerr=scint_bw(burst,burstds_origfreq,TOA,twidth,fres_orig,maskfile=df.loc[burst]['Mask_file'],start_time=beg_window*1000,outdir=outdir,plot=plot)
         df.loc[burst,'Scint_bw']=scintbw
         df.loc[burst,'Scint_bw_error']=scintbwerr
-
+        
         print("*** Performing fluence calculations for burst B%s ***"%burst)
         #use all this information to compute the fluence etc of the burst and make a final plot
         sn, peak_sn, peak_flux, fluence, isotropic_energy, spectral_energy, spectral_luminosity=compute_fluence(burst,burstds,dynspec_off,TOA,FOA,twidth,fwidth,tres,fres,freqs,SEFD,distance=distance,start_time=beg_window*1000,outdir=outdir,plot=plot)
@@ -673,3 +750,6 @@ if __name__ == "__main__":
 
 
         df.to_csv(outdir+out_filename)
+        
+
+        
